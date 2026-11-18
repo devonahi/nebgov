@@ -10,10 +10,22 @@ mod error;
 mod events;
 mod split_delegation;
 
-pub use delegation_registry::{DelegateProfile, DelegationEntry, DelegationHistoryEntry, DelegatorInfo};
+pub use delegation_registry::{
+    DelegateProfile, DelegationEntry, DelegationHistoryEntry, DelegatorInfo,
+};
 pub use delegation_sig::DelegationPermit;
 pub use error::TokenVotesError;
 pub use split_delegation::SplitDelegation;
+
+pub(crate) const PERSISTENT_TTL_LEDGERS: u32 = 6_307_200;
+
+pub(crate) fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, PERSISTENT_TTL_LEDGERS, PERSISTENT_TTL_LEDGERS);
+    }
+}
 
 #[cfg(test)]
 mod delegation_sig_tests;
@@ -50,28 +62,28 @@ pub enum DataKey {
     TotalCheckpoints,     // Vec<Checkpoint> for total supply
     Token,                // underlying SEP-41 token address
     Admin,
-    Nonce(Address),            // owner -> nonce for delegate_by_sig
-    CheckpointRetentionPeriod, // u32: number of ledgers to retain checkpoints
-    AccountList,               // Vec<Address>: all accounts that have checkpoints
-    IsInAccountList(Address),  // bool: marker for O(1) AccountList membership check
-    DelegatorRecord(Address),  // delegator -> DelegatorRecord
-    TimeWeightEnabled,         // bool
-    TimeWeightScale,           // u32
-    DomainSeparator,                  // BytesN<32>: cached at init
-    UsedNonce(Address, u64),          // (delegator, nonce) -> bool: replay protection
-    DelegationPermitExpiry(Address),  // delegator -> u32: latest permit expiry
-    RelayerWhitelist(Address),        // relayer -> bool: optional whitelist
-    RelayerWhitelistEnabled,          // bool
+    Nonce(Address),                  // owner -> nonce for delegate_by_sig
+    CheckpointRetentionPeriod,       // u32: number of ledgers to retain checkpoints
+    AccountList,                     // Vec<Address>: all accounts that have checkpoints
+    IsInAccountList(Address),        // bool: marker for O(1) AccountList membership check
+    DelegatorRecord(Address),        // delegator -> DelegatorRecord
+    TimeWeightEnabled,               // bool
+    TimeWeightScale,                 // u32
+    DomainSeparator,                 // BytesN<32>: cached at init
+    UsedNonce(Address, u64),         // (delegator, nonce) -> bool: replay protection
+    DelegationPermitExpiry(Address), // delegator -> u32: latest permit expiry
+    RelayerWhitelist(Address),       // relayer -> bool: optional whitelist
+    RelayerWhitelistEnabled,         // bool
 
     // --- Delegation registry (issue #769) ---
     DelegationRecord(Address, Address), // (delegator, delegatee) -> DelegationEntry
     DelegationHistory(Address),         // delegator -> Vec<DelegationHistoryEntry>
     ReceivedDelegations(Address),       // delegatee -> Vec<Address> (all current delegators)
-    HistoricalDelegations(Address),     // delegatee -> Vec<Address> (all delegators who ever delegated, for snapshots)
-    DelegationDepthLimit,               // u32: max chain depth (default 1, upgradeable)
-    TotalDelegatorsFor(Address),        // delegatee -> u32: count of current delegators
-    DelegationChain(Address),           // delegator -> Vec<Address>: full chain from delegator to tip
-    ChainDepth(Address),                // delegator -> u32: depth of delegation chain from this delegator
+    HistoricalDelegations(Address), // delegatee -> Vec<Address> (all delegators who ever delegated, for snapshots)
+    DelegationDepthLimit,           // u32: max chain depth (default 1, upgradeable)
+    TotalDelegatorsFor(Address),    // delegatee -> u32: count of current delegators
+    DelegationChain(Address),       // delegator -> Vec<Address>: full chain from delegator to tip
+    ChainDepth(Address), // delegator -> u32: depth of delegation chain from this delegator
 
     // --- Split delegation (issue #994) ---
     SplitDelegations(Address), // delegator -> Vec<SplitDelegation>, empty/absent means "use legacy DataKey::Delegate instead"
@@ -105,6 +117,21 @@ impl TokenVotesContract {
             .instance()
             .set(&DataKey::RelayerWhitelistEnabled, &false);
         delegation_sig::init_domain_separator(&env);
+    }
+
+    /// Upgrade the contract WASM. Only the configured admin may perform an upgrade.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+
+        let old_wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        events::emit_governor_upgraded(&env, &old_wasm_hash, &new_wasm_hash);
     }
 
     /// Delegate voting power from caller to delegatee.
@@ -275,9 +302,11 @@ impl TokenVotesContract {
         env.storage()
             .persistent()
             .set(&DataKey::Delegate(delegator.clone()), &delegatee);
+        extend_persistent_ttl(env, &DataKey::Delegate(delegator.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::DelegatorRecord(delegator.clone()), &new_record);
+        extend_persistent_ttl(env, &DataKey::DelegatorRecord(delegator.clone()));
 
         // Registry bookkeeping runs after the `Delegate` mapping above is
         // written so that chain resolution sees the new edge.
@@ -363,24 +392,31 @@ impl TokenVotesContract {
 
     /// Get the current delegatee of an account.
     pub fn delegates(env: Env, account: Address) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Delegate(account))
+        let key = DataKey::Delegate(account);
+        let result = env.storage().persistent().get(&key);
+        if result.is_some() {
+            extend_persistent_ttl(&env, &key);
+        }
+        result
     }
 
     /// Get the delegator record (balance and start ledger) for an account.
     pub fn get_delegator_record(env: Env, account: Address) -> DelegatorRecord {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DelegatorRecord(account))
-            .unwrap_or_default()
+        let key = DataKey::DelegatorRecord(account);
+        let record = env.storage().persistent().get(&key).unwrap_or_default();
+        extend_persistent_ttl(&env, &key);
+        record
     }
 
     /// Get current voting power of an account.
     pub fn get_votes(env: Env, account: Address) -> i128 {
+        let key = DataKey::Checkpoints(account);
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::Checkpoints(account))
+            .get(&key)
             .unwrap_or(soroban_sdk::Vec::new(&env));
+        extend_persistent_ttl(&env, &key);
         if checkpoints.is_empty() {
             return 0;
         }
@@ -554,16 +590,16 @@ impl TokenVotesContract {
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let current_ledger = env.ledger().sequence();
-        assert!(
-            ledger <= current_ledger,
-            "ledger must not exceed current ledger"
-        );
+        if ledger > current_ledger {
+            env.panic_with_error(TokenVotesError::FutureLedger);
+        }
 
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
             .get(&DataKey::Checkpoints(account.clone()))
             .unwrap_or(soroban_sdk::Vec::new(&env));
+        extend_persistent_ttl(&env, &DataKey::Checkpoints(account));
 
         let cp = Self::binary_search(&checkpoints, ledger);
         if cp.votes <= 0 {
@@ -596,11 +632,15 @@ impl TokenVotesContract {
     /// the value recorded at or just before `ledger`. This is used by the
     /// governor to compute quorum as a fraction of the historical total supply.
     pub fn get_past_total_supply(env: Env, ledger: u32) -> i128 {
+        if ledger > env.ledger().sequence() {
+            env.panic_with_error(TokenVotesError::FutureLedger);
+        }
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
             .get(&DataKey::TotalCheckpoints)
             .unwrap_or(soroban_sdk::Vec::new(&env));
+        extend_persistent_ttl(&env, &DataKey::TotalCheckpoints);
 
         let cp = Self::binary_search(&checkpoints, ledger);
         if cp.votes <= 0 {
@@ -618,11 +658,13 @@ impl TokenVotesContract {
 
     /// Write a checkpoint for an account. Called internally after balance changes.
     pub fn checkpoint(env: Env, account: Address, votes: i128) {
+        let key = DataKey::Checkpoints(account.clone());
         let mut checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::Checkpoints(account.clone()))
+            .get(&key)
             .unwrap_or(soroban_sdk::Vec::new(&env));
+        extend_persistent_ttl(&env, &key);
 
         let current_ledger = env.ledger().sequence();
 
@@ -657,6 +699,7 @@ impl TokenVotesContract {
         env.storage()
             .persistent()
             .set(&DataKey::Checkpoints(account), &checkpoints);
+        extend_persistent_ttl(&env, &key);
     }
 
     // --- Internal helpers ---
@@ -700,11 +743,17 @@ impl TokenVotesContract {
         env.storage()
             .persistent()
             .set(&DataKey::TotalCheckpoints, &checkpoints);
+        extend_persistent_ttl(env, &DataKey::TotalCheckpoints);
     }
 
     /// Update an account's voting power checkpoints by `delta`.
     /// Also registers the account in AccountList so it can be pruned later.
-    pub(crate) fn update_account_votes(env: &Env, account: Address, delta: i128, delta_weighted_sum: i128) {
+    pub(crate) fn update_account_votes(
+        env: &Env,
+        account: Address,
+        delta: i128,
+        delta_weighted_sum: i128,
+    ) {
         let mut checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
@@ -742,6 +791,7 @@ impl TokenVotesContract {
         env.storage()
             .persistent()
             .set(&DataKey::Checkpoints(account.clone()), &checkpoints);
+        extend_persistent_ttl(env, &DataKey::Checkpoints(account.clone()));
 
         // Register account in the global list so prune_checkpoints can find it.
         // Uses a persistent marker for O(1) membership check instead of O(N) scan.
@@ -760,9 +810,11 @@ impl TokenVotesContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::AccountList, &account_list);
+            extend_persistent_ttl(env, &DataKey::AccountList);
             env.storage()
                 .persistent()
                 .set(&DataKey::IsInAccountList(account.clone()), &true);
+            extend_persistent_ttl(env, &DataKey::IsInAccountList(account.clone()));
         }
 
         env.events()
@@ -1341,6 +1393,7 @@ mod tests {
         // Between checkpoints: return the most recent value before the query.
         assert_eq!(client.get_past_total_supply(&3), 100); // between ledger 1 and 5
         assert_eq!(client.get_past_total_supply(&7), 300); // between ledger 5 and 10
+        env.ledger().with_mut(|l| l.sequence_number = 99);
         assert_eq!(client.get_past_total_supply(&99), 600); // after last checkpoint
 
         // Before any checkpoint: return 0.
@@ -1495,8 +1548,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "ledger must not exceed current ledger")]
-    fn test_get_past_votes_panics_on_future_ledger() {
+    fn test_past_snapshot_queries_reject_future_ledgers() {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -1514,7 +1566,55 @@ mod tests {
         client.delegate(&user1, &user1);
 
         let current_ledger = env.ledger().sequence();
-        client.get_past_votes(&user1, &(current_ledger + 1));
+        let votes_err = client
+            .try_get_past_votes(&user1, &(current_ledger + 1))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(votes_err, TokenVotesError::FutureLedger.into());
+
+        let supply_err = client
+            .try_get_past_total_supply(&(current_ledger + 1))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(supply_err, TokenVotesError::FutureLedger.into());
+    }
+
+    #[test]
+    fn test_persistent_delegation_entries_survive_default_ttl() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        token::StellarAssetClient::new(&env, &token_addr).mint(&delegator, &1000i128);
+        client.delegate(&delegator, &delegatee);
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .extend_ttl(PERSISTENT_TTL_LEDGERS, PERSISTENT_TTL_LEDGERS);
+        });
+        env.ledger().with_mut(|l| l.sequence_number += 100_000);
+
+        assert_eq!(client.delegates(&delegator), Some(delegatee));
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 1000);
+    }
+
+    #[test]
+    fn test_governor_upgraded_event_shape() {
+        let env = Env::default();
+        let contract_id = env.register(TokenVotesContract, ());
+        let old_hash = BytesN::from_array(&env, &[7u8; 32]);
+        let new_hash = BytesN::from_array(&env, &[8u8; 32]);
+
+        env.as_contract(&contract_id, || {
+            events::emit_governor_upgraded(&env, &old_hash, &new_hash);
+        });
+
+        assert_eq!(env.events().all().len(), 1);
     }
 
     // \u2014\u2014 Edge-case tests (issue #192) \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014

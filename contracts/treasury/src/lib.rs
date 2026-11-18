@@ -31,6 +31,8 @@ pub enum TreasuryError {
     NotAnOwner = 6,
     /// Arithmetic overflow in an amount accumulator.
     ArithmeticOverflow = 7,
+    /// Treasury contract has already been initialized.
+    AlreadyInitialized = 8,
     /// Budget stream not found.
     StreamNotFound = 10,
     /// Budget stream is not active.
@@ -166,8 +168,20 @@ impl TreasuryContract {
         (ledger / period_ledgers) * period_ledgers
     }
 
-    /// Initialize with owners, threshold, and governor address.
-    pub fn initialize(env: Env, owners: Vec<Address>, threshold: u32, governor: Address) {
+    /// Initialize with an authenticated deployer/admin, owners, threshold, and governor address.
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        owners: Vec<Address>,
+        threshold: u32,
+        governor: Address,
+    ) {
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Owners)
+            || env.storage().instance().has(&DataKey::Governor)
+        {
+            env.panic_with_error(TreasuryError::AlreadyInitialized);
+        }
         assert!(!owners.is_empty(), "no owners");
         assert!(threshold > 0 && threshold <= owners.len(), "bad threshold");
         env.storage().instance().set(&DataKey::Owners, &owners);
@@ -1004,9 +1018,29 @@ mod tests {
 
         let mut owners = Vec::new(env);
         owners.push_back(owner);
-        client.initialize(&owners, &1u32, &governor);
+        client.initialize(&governor, &owners, &1u32, &governor);
 
         (treasury_id, token_addr, governor)
+    }
+
+    #[test]
+    fn test_initialize_rejects_second_call() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let governor = Address::generate(&env);
+        let treasury_id = env.register(TreasuryContract, ());
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let mut owners = Vec::new(&env);
+        owners.push_back(owner);
+
+        client.initialize(&admin, &owners, &1u32, &governor);
+        let err = client
+            .try_initialize(&admin, &owners, &1u32, &governor)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::AlreadyInitialized.into());
     }
 
     // ── batch_transfer tests ─────────────────────────────────────────────────
@@ -1344,6 +1378,7 @@ mod tests {
 
         // Set custom limits.
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1389,6 +1424,7 @@ mod tests {
         let proposed_amount = 500i128;
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1434,6 +1470,7 @@ mod tests {
         let proposal_amount = 800i128;
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1512,6 +1549,7 @@ mod tests {
         let max_daily = 1000i128;
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1578,6 +1616,7 @@ mod tests {
         let data = Bytes::new(&env);
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1631,6 +1670,7 @@ mod tests {
         let max_daily = 1000i128;
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1678,6 +1718,7 @@ mod tests {
         let data = Bytes::new(&env);
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1724,6 +1765,7 @@ mod tests {
         let data = Bytes::new(&env);
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1777,6 +1819,7 @@ mod tests {
         let data = Bytes::new(&env);
 
         client.initialize(
+            &owner,
             &{
                 let mut v = Vec::new(&env);
                 v.push_back(owner.clone());
@@ -1826,7 +1869,7 @@ mod tests {
         owners.push_back(owner2.clone());
 
         // Re-initialize with 2 owners and threshold 2.
-        client.initialize(&owners, &2u32, &governor);
+        client.initialize(&governor, &owners, &2u32, &governor);
 
         assert_eq!(client.threshold(), 2);
         assert!(client.is_treasury_owner(&owner1));
@@ -1870,7 +1913,7 @@ mod tests {
         let owner = Address::generate(&env);
         let mut owners = Vec::new(&env);
         owners.push_back(owner.clone());
-        client.initialize(&owners, &1u32, &governor);
+        client.initialize(&governor, &owners, &1u32, &governor);
 
         let unauthorized = Address::generate(&env);
         client.slash_signer(&unauthorized, &owner, &Symbol::new(&env, "bad"));
@@ -1888,7 +1931,7 @@ mod tests {
         let owner = Address::generate(&env);
         let mut owners = Vec::new(&env);
         owners.push_back(owner.clone());
-        client.initialize(&owners, &1u32, &governor);
+        client.initialize(&governor, &owners, &1u32, &governor);
 
         let non_owner = Address::generate(&env);
         client.slash_signer(&governor, &non_owner, &Symbol::new(&env, "bad"));
@@ -1906,7 +1949,7 @@ mod tests {
         let owner = Address::generate(&env);
         let mut owners = Vec::new(&env);
         owners.push_back(owner.clone());
-        client.initialize(&owners, &1u32, &governor);
+        client.initialize(&governor, &owners, &1u32, &governor);
 
         // Attempting to slash the only remaining owner must panic.
         client.slash_signer(&governor, &owner, &Symbol::new(&env, "bad"));
@@ -2060,7 +2103,7 @@ mod tests {
         let client = TreasuryContractClient::new(&env, &treasury_id);
         let mut owners = Vec::new(&env);
         owners.push_back(owner.clone());
-        client.initialize(&owners, &1u32, &governor);
+        client.initialize(&governor, &owners, &1u32, &governor);
 
         let target = Address::generate(&env);
         let fn_name = Symbol::new(&env, "noop");

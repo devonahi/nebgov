@@ -28,7 +28,7 @@ fuzz_target!(|input: Input| {
     let client = TreasuryContractClient::new(&env, &treasury_id);
 
     let owners = Vec::from_array(&env, [governor.clone()]);
-    client.initialize(&owners, &1, &governor);
+    client.initialize(&governor, &owners, &1, &governor);
 
     // Invalid values must be rejected, while valid values must round-trip.
     let result = client.try_create_stream(

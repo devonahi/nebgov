@@ -51,6 +51,18 @@ fail()  { printf '%b[error]%b %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
 CONTRACT_NAME="${1:-}"
 [[ -n "$CONTRACT_NAME" ]] || fail "Usage: $0 <contract-name>  (e.g. sorogov_governor)"
 
+# Governance proposals target the contract being upgraded, not the governor itself.
+# Each supported contract adds a deployed-address environment variable here.
+case "$CONTRACT_NAME" in
+  sorogov_token_votes)
+    TARGET_ADDRESS="${TOKEN_VOTES_ADDRESS:-}"
+    [[ -n "$TARGET_ADDRESS" ]] || fail "TOKEN_VOTES_ADDRESS is not set. Run deploy-testnet.sh first or set it in $ENV_FILE."
+    ;;
+  *)
+    TARGET_ADDRESS="$GOVERNOR_ADDRESS"
+    ;;
+esac
+
 # ---- Load env ---------------------------------------------------
 if [[ -f "$ENV_FILE" ]]; then
   info "Loading env from $ENV_FILE"
@@ -120,7 +132,7 @@ PROPOSAL_OUTPUT="$(stellar contract invoke \
   --description "$DESCRIPTION" \
   --description_hash "0000000000000000000000000000000000000000000000000000000000000000" \
   --metadata_uri "" \
-  --targets "[\"$GOVERNOR_ADDRESS\"]" \
+  --targets "[\"$TARGET_ADDRESS\"]" \
   --fn_names "[\"upgrade\"]" \
   --calldatas "[\"$CALLDATA_HEX\"]" \
   2>&1)"

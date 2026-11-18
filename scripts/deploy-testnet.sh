@@ -260,6 +260,7 @@ stellar contract invoke \
   --source "$IDENTITY" \
   --network "$NETWORK" \
   -- initialize \
+  --admin "$DEPLOYER_ADDR" \
   --owners "[\"$DEPLOYER_ADDR\"]" \
   --threshold "$TREASURY_THRESH" \
   --governor "$GOVERNOR_ADDRESS" \

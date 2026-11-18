@@ -173,10 +173,20 @@ fn remove_old_distribution(
         let entry_balance = split_amount(&old_splits, i, old_record.balance);
         let entry_ws = entry_balance * old_record.start_ledger as i128;
         if entry_balance != 0 || entry_ws != 0 {
-            TokenVotesContract::update_account_votes(env, s.delegatee.clone(), -entry_balance, -entry_ws);
+            TokenVotesContract::update_account_votes(
+                env,
+                s.delegatee.clone(),
+                -entry_balance,
+                -entry_ws,
+            );
         }
         if s.delegatee != *delegator {
-            crate::delegation_registry::revoke_registry_entry(env, delegator, &s.delegatee, current_ledger);
+            crate::delegation_registry::revoke_registry_entry(
+                env,
+                delegator,
+                &s.delegatee,
+                current_ledger,
+            );
         }
         i += 1;
     }
@@ -202,7 +212,12 @@ fn apply_new_distribution(
         let entry_balance = split_amount(splits, i, balance);
         let entry_ws = entry_balance * start_ledger as i128;
         if entry_balance != 0 || entry_ws != 0 {
-            TokenVotesContract::update_account_votes(env, s.delegatee.clone(), entry_balance, entry_ws);
+            TokenVotesContract::update_account_votes(
+                env,
+                s.delegatee.clone(),
+                entry_balance,
+                entry_ws,
+            );
         }
         if s.delegatee != *delegator {
             crate::delegation_registry::register_delegation(
@@ -229,14 +244,15 @@ fn store_result(env: &Env, delegator: &Address, splits: &Vec<SplitDelegation>) {
         .remove(&DataKey::Delegate(delegator.clone()));
 
     if splits.len() == 1 && splits.get(0).unwrap().weight_bps == BPS_DENOMINATOR {
-        env.storage().persistent().set(
-            &DataKey::Delegate(delegator.clone()),
-            &splits.get(0).unwrap().delegatee,
-        );
-    } else {
+        let key = DataKey::Delegate(delegator.clone());
         env.storage()
             .persistent()
-            .set(&DataKey::SplitDelegations(delegator.clone()), splits);
+            .set(&key, &splits.get(0).unwrap().delegatee);
+        crate::extend_persistent_ttl(env, &key);
+    } else {
+        let key = DataKey::SplitDelegations(delegator.clone());
+        env.storage().persistent().set(&key, splits);
+        crate::extend_persistent_ttl(env, &key);
     }
 }
 
@@ -298,9 +314,9 @@ fn apply_split_core(env: &Env, delegator: Address, splits: Vec<SplitDelegation>)
     );
 
     store_result(env, &delegator, &splits);
-    env.storage()
-        .persistent()
-        .set(&DataKey::DelegatorRecord(delegator.clone()), &new_record);
+    let record_key = DataKey::DelegatorRecord(delegator.clone());
+    env.storage().persistent().set(&record_key, &new_record);
+    crate::extend_persistent_ttl(env, &record_key);
 }
 
 pub(crate) fn delegate_split(env: &Env, delegator: Address, splits: Vec<SplitDelegation>) {

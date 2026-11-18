@@ -24,7 +24,7 @@ fn setup(env: &Env) -> (Address, Address, Address, Address) {
 
     let mut owners = Vec::new(env);
     owners.push_back(owner);
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     // Mint tokens to treasury for stream spending
     let sac_client = token::StellarAssetClient::new(env, &token_addr);
@@ -1147,7 +1147,7 @@ fn test_stream_and_batch_transfer_share_spending_cap() {
 
     let mut owners = Vec::new(&env);
     owners.push_back(asset_owner.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
@@ -1204,7 +1204,7 @@ fn test_batch_transfer_blocked_after_stream_consumes_cap() {
 
     let mut owners = Vec::new(&env);
     owners.push_back(asset_owner.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
@@ -1265,7 +1265,7 @@ fn test_stream_spend_blocked_after_batch_transfer_consumes_cap() {
 
     let mut owners = Vec::new(&env);
     owners.push_back(asset_owner.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
@@ -1409,7 +1409,7 @@ fn test_slash_signer_auto_revokes_owned_streams() {
     let mut owners = Vec::new(&env);
     owners.push_back(owner_a.clone());
     owners.push_back(owner_b.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
@@ -1485,7 +1485,7 @@ fn test_slashed_owner_stream_revoked_blocks_spend() {
     let mut owners = Vec::new(&env);
     owners.push_back(owner_a.clone());
     owners.push_back(owner_b.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
@@ -1533,7 +1533,7 @@ fn test_slash_signer_with_no_streams_succeeds() {
     let mut owners = Vec::new(&env);
     owners.push_back(owner_a.clone());
     owners.push_back(owner_b.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &1_000i128);
@@ -1579,7 +1579,7 @@ fn test_slash_signer_skips_already_revoked_streams() {
     let mut owners = Vec::new(&env);
     owners.push_back(owner_a.clone());
     owners.push_back(owner_b.clone());
-    client.initialize(&owners, &1u32, &governor);
+    client.initialize(&governor, &owners, &1u32, &governor);
 
     let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);

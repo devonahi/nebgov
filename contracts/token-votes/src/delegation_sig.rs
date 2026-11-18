@@ -112,18 +112,18 @@ pub fn compute_permit_hash(env: &Env, permit: &DelegationPermit) -> BytesN<32> {
 /// Current expected nonce for `delegator` (the next nonce a valid permit
 /// must present).
 pub fn current_nonce(env: &Env, delegator: &Address) -> u64 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Nonce(delegator.clone()))
-        .unwrap_or(0)
+    let key = DataKey::Nonce(delegator.clone());
+    let nonce = env.storage().persistent().get(&key).unwrap_or(0);
+    crate::extend_persistent_ttl(env, &key);
+    nonce
 }
 
 /// Whether `nonce` has ever been consumed by a permit from `delegator`.
 pub fn is_nonce_used(env: &Env, delegator: &Address, nonce: u64) -> bool {
-    env.storage()
-        .persistent()
-        .get(&DataKey::UsedNonce(delegator.clone(), nonce))
-        .unwrap_or(false)
+    let key = DataKey::UsedNonce(delegator.clone(), nonce);
+    let used = env.storage().persistent().get(&key).unwrap_or(false);
+    crate::extend_persistent_ttl(env, &key);
+    used
 }
 
 /// Bump `delegator`'s nonce far past anything they may have already signed,
@@ -131,9 +131,9 @@ pub fn is_nonce_used(env: &Env, delegator: &Address, nonce: u64) -> bool {
 /// the new nonce.
 pub fn invalidate_all_permits(env: &Env, delegator: &Address) -> u64 {
     let new_nonce = current_nonce(env, delegator) + INVALIDATE_ALL_STEP;
-    env.storage()
-        .persistent()
-        .set(&DataKey::Nonce(delegator.clone()), &new_nonce);
+    let key = DataKey::Nonce(delegator.clone());
+    env.storage().persistent().set(&key, &new_nonce);
+    crate::extend_persistent_ttl(env, &key);
     new_nonce
 }
 
@@ -151,10 +151,10 @@ pub fn is_relayer_allowed(env: &Env, relayer: &Address) -> bool {
     if !relayer_whitelist_enabled(env) {
         return true;
     }
-    env.storage()
-        .persistent()
-        .get(&DataKey::RelayerWhitelist(relayer.clone()))
-        .unwrap_or(false)
+    let key = DataKey::RelayerWhitelist(relayer.clone());
+    let allowed = env.storage().persistent().get(&key).unwrap_or(false);
+    crate::extend_persistent_ttl(env, &key);
+    allowed
 }
 
 pub fn set_relayer_whitelist_enabled(env: &Env, enabled: bool) {
@@ -164,17 +164,20 @@ pub fn set_relayer_whitelist_enabled(env: &Env, enabled: bool) {
 }
 
 pub fn set_relayer_whitelisted(env: &Env, relayer: &Address, whitelisted: bool) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::RelayerWhitelist(relayer.clone()), &whitelisted);
+    let key = DataKey::RelayerWhitelist(relayer.clone());
+    env.storage().persistent().set(&key, &whitelisted);
+    crate::extend_persistent_ttl(env, &key);
 }
 
 /// Latest `expiry_ledger` seen in a successfully-applied permit for
 /// `delegator`, or `None` if they have never delegated by signature.
 pub fn delegation_permit_expiry(env: &Env, delegator: &Address) -> Option<u32> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::DelegationPermitExpiry(delegator.clone()))
+    let key = DataKey::DelegationPermitExpiry(delegator.clone());
+    let expiry = env.storage().persistent().get(&key);
+    if expiry.is_some() {
+        crate::extend_persistent_ttl(env, &key);
+    }
+    expiry
 }
 
 /// Validate a [`DelegationPermit`] and cryptographically authorize it via
@@ -214,18 +217,19 @@ pub fn verify_delegation_permit(env: &Env, permit: &DelegationPermit) -> Address
     let args = soroban_sdk::vec![env, permit.clone().into_val(env)];
     permit.delegator.require_auth_for_args(args);
 
-    env.storage().persistent().set(
-        &DataKey::UsedNonce(permit.delegator.clone(), permit.nonce),
-        &true,
-    );
-    env.storage().persistent().set(
-        &DataKey::Nonce(permit.delegator.clone()),
-        &(permit.nonce + 1),
-    );
-    env.storage().persistent().set(
-        &DataKey::DelegationPermitExpiry(permit.delegator.clone()),
-        &permit.expiry_ledger,
-    );
+    let used_nonce_key = DataKey::UsedNonce(permit.delegator.clone(), permit.nonce);
+    env.storage().persistent().set(&used_nonce_key, &true);
+    crate::extend_persistent_ttl(env, &used_nonce_key);
+    let nonce_key = DataKey::Nonce(permit.delegator.clone());
+    env.storage()
+        .persistent()
+        .set(&nonce_key, &(permit.nonce + 1));
+    crate::extend_persistent_ttl(env, &nonce_key);
+    let expiry_key = DataKey::DelegationPermitExpiry(permit.delegator.clone());
+    env.storage()
+        .persistent()
+        .set(&expiry_key, &permit.expiry_ledger);
+    crate::extend_persistent_ttl(env, &expiry_key);
 
     permit.delegator.clone()
 }

@@ -34,4 +34,5 @@ pub enum TokenVotesError {
     SplitEmpty = 23,
     WeightBpsOverflow = 24,
     TokenNotSet = 25,
+    FutureLedger = 26,
 }

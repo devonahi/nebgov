@@ -527,6 +527,7 @@ export enum TreasuryErrorCode {
   TxNotFound             = 5,
   NotAnOwner             = 6,
   ArithmeticOverflow     = 7,
+  AlreadyInitialized     = 8,
 
   // Stream errors (match on-chain TreasuryError enum)
   StreamNotFound = 10,
@@ -560,6 +561,7 @@ const TREASURY_MESSAGES: Record<TreasuryErrorCode, string> = {
   [TreasuryErrorCode.TxNotFound]: "Treasury transaction not found",
   [TreasuryErrorCode.NotAnOwner]: "Address is not a treasury owner",
   [TreasuryErrorCode.ArithmeticOverflow]: "Treasury amount calculation overflowed",
+  [TreasuryErrorCode.AlreadyInitialized]: "Treasury contract is already initialized",
   [TreasuryErrorCode.StreamNotFound]: "Budget stream not found",
   [TreasuryErrorCode.StreamNotActive]: "Budget stream is not active",
   [TreasuryErrorCode.StreamExpired]: "Budget stream has expired",

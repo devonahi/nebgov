@@ -3,6 +3,7 @@ use soroban_sdk::{Address, Env, Symbol};
 pub const DELEGATED_BY_SIG_TOPIC: &str = "DelegatedBySig";
 pub const PERMITS_INVALIDATED_TOPIC: &str = "PermitsInvalidated";
 pub const RELAYER_WHITELIST_UPDATED_TOPIC: &str = "RelayerWhitelistUpdated";
+pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -25,6 +26,13 @@ pub struct PermitsInvalidatedEvent {
 pub struct RelayerWhitelistUpdatedEvent {
     pub relayer: Address,
     pub whitelisted: bool,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct GovernorUpgradedEvent {
+    pub old_hash: soroban_sdk::BytesN<32>,
+    pub new_hash: soroban_sdk::BytesN<32>,
 }
 
 /// Emitted whenever a signed delegation permit is applied on-chain via
@@ -72,6 +80,20 @@ pub fn emit_relayer_whitelist_updated(env: &Env, relayer: &Address, whitelisted:
         RelayerWhitelistUpdatedEvent {
             relayer: relayer.clone(),
             whitelisted,
+        },
+    );
+}
+
+pub fn emit_governor_upgraded(
+    env: &Env,
+    old_hash: &soroban_sdk::BytesN<32>,
+    new_hash: &soroban_sdk::BytesN<32>,
+) {
+    env.events().publish(
+        (Symbol::new(env, GOVERNOR_UPGRADED_TOPIC),),
+        GovernorUpgradedEvent {
+            old_hash: old_hash.clone(),
+            new_hash: new_hash.clone(),
         },
     );
 }

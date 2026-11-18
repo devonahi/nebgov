@@ -184,7 +184,7 @@ impl SimulationRunner {
         let treasury_owners = SorobanVec::from_array(&env, [admin.clone()]);
         let treasury_id = env.register(TreasuryContract, ());
         let treasury = TreasuryContractClient::new(&env, &treasury_id);
-        treasury.initialize(&treasury_owners, &1u32, &governor_id);
+        treasury.initialize(&admin, &treasury_owners, &1u32, &governor_id);
 
         // Strategies are admin-registered and treasury-funded, so the admin
         // here is the harness admin and the treasury is the multisig above.

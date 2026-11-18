@@ -99,7 +99,6 @@ fn resolve_chain(env: &Env, start: Address) -> Vec<Address> {
     chain
 }
 
-
 fn emit_delegation_registered(
     env: &Env,
     delegator: &Address,
@@ -113,7 +112,12 @@ fn emit_delegation_registered(
     );
 }
 
-fn emit_delegation_revoked(env: &Env, delegator: &Address, previous_delegatee: &Address, at_ledger: u32) {
+fn emit_delegation_revoked(
+    env: &Env,
+    delegator: &Address,
+    previous_delegatee: &Address,
+    at_ledger: u32,
+) {
     env.events().publish(
         (Symbol::new(env, "DelegationRevoked"), delegator.clone()),
         (previous_delegatee.clone(), at_ledger),
@@ -169,9 +173,11 @@ pub(crate) fn register_delegation(
         sequence,
     });
     env.storage().persistent().set(&history_key, &history);
+    crate::extend_persistent_ttl(env, &history_key);
 
+    let record_key = DataKey::DelegationRecord(delegator.clone(), delegatee.clone());
     env.storage().persistent().set(
-        &DataKey::DelegationRecord(delegator.clone(), delegatee.clone()),
+        &record_key,
         &DelegationEntry {
             delegator: delegator.clone(),
             delegatee: delegatee.clone(),
@@ -181,6 +187,7 @@ pub(crate) fn register_delegation(
             revoked_at_ledger: None,
         },
     );
+    crate::extend_persistent_ttl(env, &record_key);
 
     let received_key = DataKey::ReceivedDelegations(delegatee.clone());
     let mut received: Vec<Address> = env
@@ -190,6 +197,7 @@ pub(crate) fn register_delegation(
         .unwrap_or(Vec::new(env));
     received.push_back(delegator.clone());
     env.storage().persistent().set(&received_key, &received);
+    crate::extend_persistent_ttl(env, &received_key);
 
     let historical_key = DataKey::HistoricalDelegations(delegatee.clone());
     let mut historical: Vec<Address> = env
@@ -200,11 +208,13 @@ pub(crate) fn register_delegation(
     if !historical.contains(delegator.clone()) {
         historical.push_back(delegator.clone());
         env.storage().persistent().set(&historical_key, &historical);
+        crate::extend_persistent_ttl(env, &historical_key);
     }
 
     let count_key = DataKey::TotalDelegatorsFor(delegatee.clone());
     let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
     env.storage().persistent().set(&count_key, &(count + 1));
+    crate::extend_persistent_ttl(env, &count_key);
 
     let full_chain = resolve_chain(env, delegator.clone());
     let depth = full_chain.len() - 1;
@@ -254,7 +264,11 @@ pub(crate) fn revoke_registry_entry(
     }
 
     let received_key = DataKey::ReceivedDelegations(old_delegatee.clone());
-    if let Some(mut received) = env.storage().persistent().get::<_, Vec<Address>>(&received_key) {
+    if let Some(mut received) = env
+        .storage()
+        .persistent()
+        .get::<_, Vec<Address>>(&received_key)
+    {
         if let Some(idx) = received.first_index_of(delegator.clone()) {
             received.remove(idx);
             env.storage().persistent().set(&received_key, &received);
@@ -297,10 +311,9 @@ pub(crate) fn get_delegators(
     let end = offset.saturating_add(limit).min(len);
     while i < end {
         let delegator = received.get(i).unwrap();
-        let record: Option<DelegationEntry> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::DelegationRecord(delegator.clone(), delegatee.clone()));
+        let record: Option<DelegationEntry> = env.storage().persistent().get(
+            &DataKey::DelegationRecord(delegator.clone(), delegatee.clone()),
+        );
         let record_balance: crate::DelegatorRecord = env
             .storage()
             .persistent()
@@ -362,9 +375,14 @@ pub(crate) fn get_delegate_profile(env: &Env, address: Address) -> DelegateProfi
             .unwrap_or_default();
         total_delegated_power += record_balance.balance;
 
-        if let Some(entry) = env.storage().persistent().get::<_, DelegationEntry>(
-            &DataKey::DelegationRecord(delegator.clone(), address.clone()),
-        ) {
+        if let Some(entry) =
+            env.storage()
+                .persistent()
+                .get::<_, DelegationEntry>(&DataKey::DelegationRecord(
+                    delegator.clone(),
+                    address.clone(),
+                ))
+        {
             first_delegated_at_ledger = Some(match first_delegated_at_ledger {
                 Some(existing) => existing.min(entry.delegated_at_ledger),
                 None => entry.delegated_at_ledger,
@@ -401,9 +419,11 @@ pub(crate) fn get_received_delegations(
     let end = offset.saturating_add(limit).min(len);
     while i < end {
         let delegator = received.get(i).unwrap();
-        if let Some(entry) = env.storage().persistent().get::<_, DelegationEntry>(
-            &DataKey::DelegationRecord(delegator, delegatee.clone()),
-        ) {
+        if let Some(entry) = env
+            .storage()
+            .persistent()
+            .get::<_, DelegationEntry>(&DataKey::DelegationRecord(delegator, delegatee.clone()))
+        {
             result.push_back(entry);
         }
         i += 1;
@@ -413,7 +433,10 @@ pub(crate) fn get_received_delegations(
 
 pub(crate) fn set_delegation_depth_limit(env: &Env, new_limit: u32) {
     assert!(new_limit >= 1, "depth limit must be at least 1");
-    assert!(new_limit <= MAX_CHAIN_WALK, "depth limit must not exceed MAX_CHAIN_WALK");
+    assert!(
+        new_limit <= MAX_CHAIN_WALK,
+        "depth limit must not exceed MAX_CHAIN_WALK"
+    );
     let old_limit = get_depth_limit(env);
     env.storage()
         .instance()
